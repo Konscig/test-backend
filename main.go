@@ -12,7 +12,8 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/google/uuid"
+	"github.com/gofrs/uuid/v5"
+	"github.com/golang-jwt/jwt/v5"
 	"github.com/joho/godotenv"
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/driver/postgres"
@@ -47,24 +48,99 @@ func extractBearerToken(c *gin.Context) (string, error) {
 
 func CheckTokenMiddleware(tokenType string) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		bearerToken, err := extractBearerToken(c)
-		if err != nil {
-			c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid token format"})
-			c.Abort()
+		db, ok := c.Value("db").(*gorm.DB)
+		if !ok {
+			c.JSON(500, gin.H{"error": "DB connection not found"})
 			return
 		}
-		clearToken, err := base64.StdEncoding.DecodeString(bearerToken)
-		if err != nil {
-			c.JSON(http.StatusUnauthorized, gin.H{"error": "token decoding error"})
-		}
-		token, err := checkToken(string(clearToken), tokenType)
+
+		bearerToken, err := extractBearerToken(c)
 		if err != nil {
 			c.JSON(http.StatusUnauthorized, gin.H{"error": err.Error()})
 			c.Abort()
 			return
 		}
-		sub, _ := extractSub(token)
+
+		var token *jwt.Token
+		_, err = base64.StdEncoding.DecodeString(bearerToken)
+		if err != nil {
+			tokenType = "access"
+		} else {
+			tokenType = "refresh"
+		}
+
+		fmt.Println("1", tokenType)
+
+		if tokenType == "refresh" {
+			clearToken, err := base64.StdEncoding.DecodeString(bearerToken)
+			if err != nil {
+				c.JSON(http.StatusUnauthorized, gin.H{"error": "token decoding error"})
+				c.Abort()
+				return
+			}
+
+			token, err = checkToken(string(clearToken), tokenType)
+			fmt.Println("2", token)
+			if err != nil {
+				c.JSON(http.StatusUnauthorized, gin.H{"error": err.Error()})
+				c.Abort()
+				return
+			}
+
+			sub, err := extractSub(token)
+			if err != nil {
+				c.JSON(http.StatusUnauthorized, gin.H{"error": err.Error()})
+				c.Abort()
+				return
+			}
+
+			var refreshTokens []RefreshToken
+			err = db.Where("user_id = ? AND expired = false", sub).Find(&refreshTokens).Error
+			if err != nil {
+				fmt.Println("refresh token not found")
+				c.JSON(401, gin.H{"error": err.Error()})
+				c.Abort()
+				return
+			}
+
+			shaToken := sha256.Sum256([]byte(bearerToken))
+			var spottedToken *RefreshToken
+			for i := range refreshTokens {
+				err = bcrypt.CompareHashAndPassword([]byte(refreshTokens[i].TokenHash), shaToken[:])
+				if err == nil {
+					spottedToken = &refreshTokens[i]
+					break
+				}
+			}
+			if spottedToken == nil {
+				c.JSON(http.StatusUnauthorized, gin.H{"error": err.Error()})
+				c.Abort()
+				return
+			}
+			c.Set("spottedToken", spottedToken)
+
+		} else if tokenType == "access" {
+			fmt.Println("5", token)
+			token, err = checkToken(bearerToken, tokenType)
+		} else {
+			fmt.Println("6", bearerToken)
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
+			c.Abort()
+			return
+		}
+		if err != nil {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": err.Error()})
+			c.Abort()
+			return
+		}
+		sub, err := extractSub(token)
+		if err != nil {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": err.Error()})
+			c.Abort()
+			return
+		}
 		c.Set("userid", sub)
+		c.Set("tokenType", tokenType)
 		c.Next()
 	}
 }
@@ -79,11 +155,10 @@ func generateTokens(userID uuid.UUID) (string, string, []byte, error) {
 	if err != nil {
 		return "", "", nil, fmt.Errorf("failed to create refresh token: %v", err)
 	}
+	fmt.Println("CREATED REF token: ", refreshToken)
 
 	b64Token := base64.StdEncoding.EncodeToString([]byte(refreshToken))
-	fmt.Printf("CREATED REF token: %s\n", b64Token)
 	shaToken := sha256.Sum256([]byte(b64Token))
-	fmt.Printf("SHA256 of CREATED REF token: %x\n", shaToken)
 	refreshHash, err := bcrypt.GenerateFromPassword([]byte(shaToken[:]), bcrypt.DefaultCost)
 	if err != nil {
 		return "", "", nil, fmt.Errorf("failed to hash refresh token: %v", err)
@@ -116,7 +191,7 @@ func main() {
 	accessTokenGroup := router.Group("/user")
 	accessTokenGroup.Use(CheckTokenMiddleware("access"))
 	{
-		accessTokenGroup.GET("/:guid/", getUserId)
+		accessTokenGroup.GET("/uuid/", getUserId)
 		accessTokenGroup.POST("/logout/", postLogout)
 	}
 
@@ -186,53 +261,28 @@ func postRefresh(c *gin.Context) {
 		return
 	}
 
-	sub, ok := c.Get("userid")
-
+	tokenValue, ok := c.Get("spottedToken")
 	if !ok {
-		fmt.Println("sub not found in context")
+		fmt.Println("token not found in context")
 		c.JSON(401, gin.H{"error": "Unauthorized"})
 		return
 	}
 
-	var refreshTokens []RefreshToken
-	err := db.Where("user_id = ? AND expired = false", sub).Find(&refreshTokens).Error
-	if err != nil {
-		fmt.Println("refresh token not found")
+	oldRefreshToken, ok := tokenValue.(*RefreshToken)
+	if !ok {
+		fmt.Println("token not found in context")
 		c.JSON(401, gin.H{"error": "Unauthorized"})
-		return
-	}
-
-	bearerToken, err := extractBearerToken(c)
-
-	if bearerToken == "" {
-		c.JSON(401, gin.H{"error": "Unauthorized"})
-		return
-	}
-
-	shaToken := sha256.Sum256([]byte(bearerToken))
-	var oldRefreshToken *RefreshToken
-	for i := range refreshTokens {
-		err = bcrypt.CompareHashAndPassword([]byte(refreshTokens[i].TokenHash), shaToken[:])
-		if err == nil {
-			oldRefreshToken = &refreshTokens[i]
-			break
-		}
-	}
-
-	if oldRefreshToken == nil {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
 		return
 	}
 
 	incomeUserAgent := c.GetHeader("User-Agent")
-	fmt.Println(incomeUserAgent)
 	incomeIPAddress := c.ClientIP()
 	webhookUrl := os.Getenv("WEBHOOK")
 
 	if incomeUserAgent != oldRefreshToken.UserAgent {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "Your User-Agent has been changed"})
 		oldRefreshToken.Expired = true
-		err = db.Save(oldRefreshToken).Error
+		err := db.Save(oldRefreshToken).Error
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to save refresh token"})
 			return
@@ -248,7 +298,7 @@ func postRefresh(c *gin.Context) {
 			"msg":     "IP has been changed",
 		}
 		jsonPayload, _ := json.Marshal(payload)
-		http.Post(webhookUrl, "application/json", bytes.NewBuffer(jsonPayload))
+		_, err := http.Post(webhookUrl, "application/json", bytes.NewBuffer(jsonPayload))
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to send webhook"})
 			return
@@ -256,7 +306,7 @@ func postRefresh(c *gin.Context) {
 	}
 
 	oldRefreshToken.Expired = true
-	err = db.Save(oldRefreshToken).Error
+	err := db.Save(oldRefreshToken).Error
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to save refresh token"})
 		return
@@ -285,7 +335,12 @@ func postRefresh(c *gin.Context) {
 }
 
 func getUserId(c *gin.Context) {
-
+	sub, ok := c.Get("userid")
+	if !ok {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to get user id"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"userid": sub})
 }
 
 func postLogout(c *gin.Context) {

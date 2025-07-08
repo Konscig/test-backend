@@ -29,9 +29,12 @@ func generateRefreshToken(userID string, exp int64) (string, error) {
 
 func checkToken(tokenString string, tokenType string) (*jwt.Token, error) {
 	token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
+		// if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+		// 	return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
+		// }
 		return []byte(os.Getenv("SECRET_KEY")), nil
 	})
-	if err == nil {
+	if err == nil && token.Valid && tokenType != "" && token != nil {
 		claims, _ := token.Claims.(jwt.MapClaims)
 		exactType := claims["type"].(string)
 		if exactType != tokenType {
@@ -49,10 +52,27 @@ func checkToken(tokenString string, tokenType string) (*jwt.Token, error) {
 }
 
 func extractSub(token *jwt.Token) (uuid.UUID, error) {
-	sub := token.Claims.(jwt.MapClaims)["sub"].(string)
+	if token == nil {
+		return uuid.Nil, fmt.Errorf("token is nil")
+	}
+	sub, exists := token.Claims.(jwt.MapClaims)["sub"].(string)
+	if !exists {
+		return uuid.Nil, fmt.Errorf("sub claim not found")
+	}
 	subUUID, err := uuid.FromString(sub)
 	if err != nil {
 		return uuid.Nil, fmt.Errorf(err.Error())
 	}
 	return subUUID, nil
+}
+
+func extractTypeAccess(tokenString string) (string, error) {
+	var tokenType string
+	token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
+		return []byte(os.Getenv("SECRET_KEY")), nil
+	})
+	if err == nil {
+		tokenType = token.Claims.(jwt.MapClaims)["type"].(string)
+	}
+	return tokenType, nil
 }
