@@ -1,9 +1,11 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"time"
 
+	"github.com/gofrs/uuid/v5"
 	"github.com/golang-jwt/jwt/v5"
 )
 
@@ -23,4 +25,34 @@ func generateRefreshToken(userID string, exp int64) (string, error) {
 		"type": "refresh",
 		"iat":  time.Now().Unix(),
 	}).SignedString([]byte(os.Getenv("SECRET_KEY")))
+}
+
+func checkToken(tokenString string, tokenType string) (*jwt.Token, error) {
+	token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
+		return []byte(os.Getenv("SECRET_KEY")), nil
+	})
+	if err == nil {
+		claims, _ := token.Claims.(jwt.MapClaims)
+		exactType := claims["type"].(string)
+		if exactType != tokenType {
+			return token, fmt.Errorf("invalid token type")
+		}
+		exp, err := claims.GetExpirationTime()
+		if err != nil {
+			return nil, fmt.Errorf("no exp time")
+		}
+		if time.Now().After(exp.Time) {
+			return nil, fmt.Errorf("token expired")
+		}
+	}
+	return token, err
+}
+
+func extractSub(token *jwt.Token) (uuid.UUID, error) {
+	sub := token.Claims.(jwt.MapClaims)["sub"].(string)
+	subUUID, err := uuid.FromString(sub)
+	if err != nil {
+		return uuid.Nil, fmt.Errorf(err.Error())
+	}
+	return subUUID, nil
 }
