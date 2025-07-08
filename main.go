@@ -1,8 +1,10 @@
 package main
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
@@ -30,13 +32,11 @@ func extractBearerToken(c *gin.Context) (string, error) {
 		return "", fmt.Errorf("authorization header is missing")
 	}
 
-	// Проверяем формат "Bearer <token>"
 	const prefix = "Bearer "
 	if !strings.HasPrefix(authHeader, prefix) {
 		return "", fmt.Errorf("invalid authorization header format")
 	}
 
-	// Извлекаем токен (обрезаем префикс)
 	token := strings.TrimPrefix(authHeader, prefix)
 	if token == "" {
 		return "", fmt.Errorf("token is missing")
@@ -103,6 +103,7 @@ func main() {
 
 	dsn := fmt.Sprintf("host=%s port=%s user=%s dbname=%s password=%s sslmode=disable", pg_host, pg_port, pg_user, pg_db, pg_password)
 	db, _ := gorm.Open(postgres.Open(dsn), &gorm.Config{})
+	db.AutoMigrate(&User{}, &RefreshToken{})
 
 	router := gin.Default()
 	router.Use(DatabaseMiddleware(db))
@@ -134,6 +135,8 @@ func postLogin(c *gin.Context) {
 		c.JSON(500, gin.H{"error": "DB connection not found"})
 		return
 	}
+	userAgent := c.GetHeader("User-Agent")
+	ipAddr := c.ClientIP()
 
 	var userData LoginRequest
 	err := c.ShouldBindJSON(&userData)
@@ -164,6 +167,8 @@ func postLogin(c *gin.Context) {
 	newRefreshToken := RefreshToken{
 		UserID:    user.ID,
 		TokenHash: string(refreshHash),
+		UserAgent: userAgent,
+		IPAddress: ipAddr,
 	}
 
 	result := db.Create(&newRefreshToken)
@@ -189,8 +194,8 @@ func postRefresh(c *gin.Context) {
 		return
 	}
 
-	var oldRefreshToken RefreshToken
-	err := db.Where("user_id = ?", sub).First(&oldRefreshToken).Error
+	var refreshTokens []RefreshToken
+	err := db.Where("user_id = ? AND expired = false", sub).Find(&refreshTokens).Error
 	if err != nil {
 		fmt.Println("refresh token not found")
 		c.JSON(401, gin.H{"error": "Unauthorized"})
@@ -198,7 +203,6 @@ func postRefresh(c *gin.Context) {
 	}
 
 	bearerToken, err := extractBearerToken(c)
-	fmt.Println("Bearer token:", bearerToken)
 
 	if bearerToken == "" {
 		c.JSON(401, gin.H{"error": "Unauthorized"})
@@ -206,13 +210,55 @@ func postRefresh(c *gin.Context) {
 	}
 
 	shaToken := sha256.Sum256([]byte(bearerToken))
-	fmt.Printf("SHA256 of BEARER token: %x\n", shaToken)
-	fmt.Printf("Hash from DB: %s\n", oldRefreshToken.TokenHash)
+	var oldRefreshToken *RefreshToken
+	for i := range refreshTokens {
+		err = bcrypt.CompareHashAndPassword([]byte(refreshTokens[i].TokenHash), shaToken[:])
+		if err == nil {
+			oldRefreshToken = &refreshTokens[i]
+			break
+		}
+	}
 
-	err = bcrypt.CompareHashAndPassword([]byte(oldRefreshToken.TokenHash), shaToken[:])
+	if oldRefreshToken == nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
+		return
+	}
 
+	incomeUserAgent := c.GetHeader("User-Agent")
+	fmt.Println(incomeUserAgent)
+	incomeIPAddress := c.ClientIP()
+	webhookUrl := os.Getenv("WEBHOOK")
+
+	if incomeUserAgent != oldRefreshToken.UserAgent {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Your User-Agent has been changed"})
+		oldRefreshToken.Expired = true
+		err = db.Save(oldRefreshToken).Error
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to save refresh token"})
+			return
+		}
+		return
+	}
+
+	if incomeIPAddress != oldRefreshToken.IPAddress {
+		payload := map[string]string{
+			"user_id": oldRefreshToken.UserID.String(),
+			"new_ip":  oldRefreshToken.IPAddress,
+			"old_ip":  incomeIPAddress,
+			"msg":     "IP has been changed",
+		}
+		jsonPayload, _ := json.Marshal(payload)
+		http.Post(webhookUrl, "application/json", bytes.NewBuffer(jsonPayload))
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to send webhook"})
+			return
+		}
+	}
+
+	oldRefreshToken.Expired = true
+	err = db.Save(oldRefreshToken).Error
 	if err != nil {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": err.Error()})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to save refresh token"})
 		return
 	}
 
@@ -225,9 +271,11 @@ func postRefresh(c *gin.Context) {
 	newRefreshToken := RefreshToken{
 		UserID:    oldRefreshToken.UserID,
 		TokenHash: string(refreshHash),
+		UserAgent: incomeUserAgent,
+		IPAddress: incomeIPAddress,
 	}
 
-	err = db.Model(&oldRefreshToken).Updates(&newRefreshToken).Error
+	err = db.Create(&newRefreshToken).Error
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to save refresh token"})
 		return
