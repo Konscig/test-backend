@@ -39,6 +39,7 @@ API для аутентификации и обновления JWT токено
 6. Заполните БД данными `psql -U user -d dbname` (учтите, что bcrypt пароля вам необходимо будет создать самому, например здесь: `https://gchq.github.io/CyberChef/#recipe=Bcrypt(10)`)
 7. Перейдите на эндпоинт `/swagger/index.html#/` для просмотра документации и выполнения тестовых запросов.
 
+P.S. Для БД можете взять мои креды ('Kostya', '$2a$10$NG8hmCmX8nBKVmQdaashIeFbZoSFL.d.UcHchQViUk9mMUT8UUS6G' <- это bcrypt пароль '1234').
 ---
 
 ## `main.go`
