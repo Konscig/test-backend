@@ -19,7 +19,7 @@ func generateAccessToken(userID string) (string, error) {
 }
 
 func generateRefreshToken(userID string, exp int64) (string, error) {
-	return jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
+	return jwt.NewWithClaims(jwt.SigningMethodHS512, jwt.MapClaims{
 		"sub":  userID,
 		"exp":  exp,
 		"type": "refresh",
@@ -28,17 +28,22 @@ func generateRefreshToken(userID string, exp int64) (string, error) {
 }
 
 func checkToken(tokenString string, tokenType string) (*jwt.Token, error) {
+	fmt.Println("income token:", tokenString)
+	fmt.Println("income type:", tokenType)
+
 	token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
-		// if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
-		// 	return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
-		// }
 		return []byte(os.Getenv("SECRET_KEY")), nil
 	})
-	if err == nil && token.Valid && tokenType != "" && token != nil {
+
+	fmt.Println("parsed token:", token)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse token")
+	}
+	if token.Valid && tokenType != "" && token != nil {
 		claims, _ := token.Claims.(jwt.MapClaims)
 		exactType := claims["type"].(string)
 		if exactType != tokenType {
-			return token, fmt.Errorf("invalid token type")
+			return nil, fmt.Errorf("invalid token type")
 		}
 		exp, err := claims.GetExpirationTime()
 		if err != nil {
@@ -61,18 +66,15 @@ func extractSub(token *jwt.Token) (uuid.UUID, error) {
 	}
 	subUUID, err := uuid.FromString(sub)
 	if err != nil {
-		return uuid.Nil, fmt.Errorf(err.Error())
+		return uuid.Nil, fmt.Errorf("uuid parse error")
 	}
 	return subUUID, nil
 }
 
-func extractTypeAccess(tokenString string) (string, error) {
-	var tokenType string
-	token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
-		return []byte(os.Getenv("SECRET_KEY")), nil
-	})
-	if err == nil {
-		tokenType = token.Claims.(jwt.MapClaims)["type"].(string)
+func getIat(token *jwt.Token) (time.Time, error) {
+	iat, exists := token.Claims.(jwt.MapClaims)["iat"].(float64)
+	if !exists {
+		return time.Time{}, fmt.Errorf("iat claim not found")
 	}
-	return tokenType, nil
+	return time.Unix(int64(iat), 0), nil
 }

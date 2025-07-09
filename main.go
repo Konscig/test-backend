@@ -56,20 +56,15 @@ func CheckTokenMiddleware(tokenType string) gin.HandlerFunc {
 
 		bearerToken, err := extractBearerToken(c)
 		if err != nil {
-			c.JSON(http.StatusUnauthorized, gin.H{"error": err.Error()})
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "failed to extract token"})
 			c.Abort()
 			return
 		}
 
 		var token *jwt.Token
-		_, err = base64.StdEncoding.DecodeString(bearerToken)
-		if err != nil {
-			tokenType = "access"
-		} else {
-			tokenType = "refresh"
-		}
 
-		fmt.Println("1", tokenType)
+		fmt.Println("type:", tokenType)
+		fmt.Println("bearer:", bearerToken)
 
 		if tokenType == "refresh" {
 			clearToken, err := base64.StdEncoding.DecodeString(bearerToken)
@@ -79,26 +74,26 @@ func CheckTokenMiddleware(tokenType string) gin.HandlerFunc {
 				return
 			}
 
+			fmt.Println("clean:", string(clearToken))
 			token, err = checkToken(string(clearToken), tokenType)
-			fmt.Println("2", token)
 			if err != nil {
-				c.JSON(http.StatusUnauthorized, gin.H{"error": err.Error()})
+				c.JSON(http.StatusUnauthorized, gin.H{"error ": "failed to check token"})
 				c.Abort()
 				return
 			}
-
 			sub, err := extractSub(token)
 			if err != nil {
-				c.JSON(http.StatusUnauthorized, gin.H{"error": err.Error()})
+				c.JSON(http.StatusUnauthorized, gin.H{"error": "failed to extract sub"})
 				c.Abort()
 				return
 			}
+			c.Set("userid", sub)
+			c.Set("tokenType", tokenType)
 
 			var refreshTokens []RefreshToken
 			err = db.Where("user_id = ? AND expired = false", sub).Find(&refreshTokens).Error
 			if err != nil {
-				fmt.Println("refresh token not found")
-				c.JSON(401, gin.H{"error": err.Error()})
+				c.JSON(401, gin.H{"error": "failed to find refresh tokens"})
 				c.Abort()
 				return
 			}
@@ -113,34 +108,90 @@ func CheckTokenMiddleware(tokenType string) gin.HandlerFunc {
 				}
 			}
 			if spottedToken == nil {
-				c.JSON(http.StatusUnauthorized, gin.H{"error": err.Error()})
+				c.JSON(http.StatusUnauthorized, gin.H{"error": "failed to find refresh token in db"})
 				c.Abort()
 				return
 			}
 			c.Set("spottedToken", spottedToken)
 
+			c.Next()
 		} else if tokenType == "access" {
-			fmt.Println("5", token)
+			fmt.Println("bearerToken: ", bearerToken)
+			fmt.Println("tokenType: ", tokenType)
+
 			token, err = checkToken(bearerToken, tokenType)
+			if err != nil {
+				c.JSON(http.StatusUnauthorized, gin.H{"error": "not access token"})
+				c.Abort()
+				return
+			}
+			sub, err := extractSub(token)
+			if err != nil {
+				c.JSON(http.StatusUnauthorized, gin.H{"error": "failed to extract sub"})
+				c.Abort()
+				return
+			}
+			c.Set("userid", sub)
+			c.Set("tokenType", tokenType)
+			c.Next()
 		} else {
-			fmt.Println("6", bearerToken)
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
 			c.Abort()
 			return
 		}
+	}
+}
+
+func NotRevokedTokenMiddleware() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		db, ok := c.Value("db").(*gorm.DB)
+		if !ok {
+			c.JSON(500, gin.H{"error": "DB connection not found"})
+			return
+		}
+
+		var token *jwt.Token
+
+		bearerToken, err := extractBearerToken(c)
 		if err != nil {
 			c.JSON(http.StatusUnauthorized, gin.H{"error": err.Error()})
 			c.Abort()
 			return
 		}
+		token, err = checkToken(bearerToken, "access")
+		if err != nil {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": err.Error()})
+			c.Abort()
+			return
+		}
+
 		sub, err := extractSub(token)
 		if err != nil {
 			c.JSON(http.StatusUnauthorized, gin.H{"error": err.Error()})
 			c.Abort()
 			return
 		}
-		c.Set("userid", sub)
-		c.Set("tokenType", tokenType)
+
+		iat, err := getIat(token)
+		if err != nil {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": err.Error()})
+			c.Abort()
+			return
+		}
+
+		var user User
+		err = db.Where("id = ?", sub).First(&user).Error
+		if err != nil {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "user not found"})
+			c.Abort()
+			return
+		}
+		if iat.Before(user.TokenValidAfter) {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "token has been revoked"})
+			c.Abort()
+			return
+		}
+		c.Set("user", &user)
 		c.Next()
 	}
 }
@@ -185,20 +236,20 @@ func main() {
 
 	noTokenGroup := router.Group("/login")
 	{
-		noTokenGroup.POST("/", postLogin)
+		noTokenGroup.POST("", postLogin)
 	}
 
 	accessTokenGroup := router.Group("/user")
-	accessTokenGroup.Use(CheckTokenMiddleware("access"))
+	accessTokenGroup.Use(CheckTokenMiddleware("access"), NotRevokedTokenMiddleware())
 	{
 		accessTokenGroup.GET("/uuid/", getUserId)
-		accessTokenGroup.POST("/logout/", postLogout)
+		accessTokenGroup.GET("/logout/", getLogout)
 	}
 
 	refreshTokenGroup := router.Group("/refresh")
 	refreshTokenGroup.Use(CheckTokenMiddleware("refresh"))
 	{
-		refreshTokenGroup.POST("/", postRefresh)
+		refreshTokenGroup.POST("", postRefresh)
 	}
 
 	router.Run("localhost:8080")
@@ -314,7 +365,7 @@ func postRefresh(c *gin.Context) {
 
 	accessToken, b64Token, refreshHash, err := generateTokens(oldRefreshToken.UserID)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err})
+		c.JSON(http.StatusInternalServerError, gin.H{"error 10": err})
 		return
 	}
 
@@ -343,6 +394,45 @@ func getUserId(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"userid": sub})
 }
 
-func postLogout(c *gin.Context) {
+func getLogout(c *gin.Context) {
+	db, ok := c.Value("db").(*gorm.DB)
+	if !ok {
+		c.JSON(500, gin.H{"error": "DB connection not found"})
+		return
+	}
 
+	tokenType, ok := c.Get("tokenType")
+	if !ok {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to get token type"})
+		return
+	}
+
+	if tokenType == "access" {
+		sub, ok := c.Get("userid")
+		if !ok {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to get user id"})
+			return
+		}
+
+		user, ok := c.Get("user")
+		if !ok {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to get user"})
+			return
+		}
+
+		err := db.Model(user).Update("token_valid_after", time.Now()).Error
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update token valid after"})
+			return
+		}
+
+		err = db.Where("user_id = ?", sub).Delete(&RefreshToken{}).Error
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to delete refresh tokens"})
+			return
+		}
+
+		c.JSON(http.StatusOK, gin.H{"message": "logged out"})
+		return
+	}
 }
