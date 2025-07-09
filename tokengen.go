@@ -9,6 +9,14 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 )
 
+// generateAccessToken генерирует JWT access токен доступа для указанного пользователя.
+//
+// Параметры:
+//   - userID: идентификатор пользователя (UUID).
+//
+// Возвращает:
+//   - string: сгенерированный JWT access токен.
+//   - error: ошибка, если токен не удалось сгенерировать.
 func generateAccessToken(userID string) (string, error) {
 	return jwt.NewWithClaims(jwt.SigningMethodHS512, jwt.MapClaims{
 		"sub":  userID,
@@ -18,6 +26,14 @@ func generateAccessToken(userID string) (string, error) {
 	}).SignedString([]byte(os.Getenv("SECRET_KEY")))
 }
 
+// generateRefreshToken генерирует JWT refresh токен доступа для указанного пользователя.
+//
+// Параметры:
+//   - userID: идентификатор пользователя (UUID).
+//
+// Возвращает:
+//   - string: сгенерированный JWT refresh токен.
+//   - error: ошибка, если токен не удалось сгенерировать.
 func generateRefreshToken(userID string, exp int64) (string, error) {
 	return jwt.NewWithClaims(jwt.SigningMethodHS512, jwt.MapClaims{
 		"sub":  userID,
@@ -27,6 +43,15 @@ func generateRefreshToken(userID string, exp int64) (string, error) {
 	}).SignedString([]byte(os.Getenv("SECRET_KEY")))
 }
 
+// checkToken проверяет валидность токена и его тип.
+//
+// Параметры:
+//   - tokenString: строка токена.
+//   - tokenType: ожидаемый тип токена (например, "access" или "refresh").
+//
+// Возвращает:
+//   - *jwt.Token: объект токена, если токен валиден.
+//   - error: ошибка, если токен не валиден или имеет неверный тип.
 func checkToken(tokenString string, tokenType string) (*jwt.Token, error) {
 	token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
 		return []byte(os.Getenv("SECRET_KEY")), nil
@@ -51,6 +76,14 @@ func checkToken(tokenString string, tokenType string) (*jwt.Token, error) {
 	return token, err
 }
 
+// extractSub извлекает идентификатор пользователя из токена.
+//
+// Параметры:
+//   - token: объект токена.
+//
+// Возвращает:
+//   - uuid.UUID: идентификатор пользователя.
+//   - error: ошибка, если идентификатор пользователя не найден.
 func extractSub(token *jwt.Token) (uuid.UUID, error) {
 	if token == nil {
 		return uuid.Nil, fmt.Errorf("token is nil")
@@ -66,6 +99,13 @@ func extractSub(token *jwt.Token) (uuid.UUID, error) {
 	return subUUID, nil
 }
 
+// getIat извлекает время создания токена из токена.
+//
+// Параметры:
+//   - token: объект токена.
+//
+// Возвращает:
+//   - time.Time: время создания токена.
 func getIat(token *jwt.Token) (time.Time, error) {
 	iat, exists := token.Claims.(jwt.MapClaims)["iat"].(float64)
 	if !exists {

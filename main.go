@@ -20,6 +20,23 @@ import (
 	"gorm.io/gorm"
 )
 
+// @title           Example JWT Auth API
+// @version         1.0
+// @description     API для аутентификации и обновления токенов JWT
+// @termsOfService  http://swagger.io/terms/
+
+// @contact.name   Konstantin Gerasimov
+// @contact.url    https://github.com/Konscig/test-backend
+
+// @license.name  No license
+
+// DatabaseMiddleware создает middleware для Gin, который устанавливает соединение с базой данных в контекст запроса.
+//
+// Параметры:
+//   - db: указатель на объект *gorm.DB (соединение с БД).
+//
+// Возвращает:
+//   - gin.HandlerFunc: middleware, который добавляет базу в контекст c.Set("db", db).
 func DatabaseMiddleware(db *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		c.Set("db", db)
@@ -27,6 +44,14 @@ func DatabaseMiddleware(db *gorm.DB) gin.HandlerFunc {
 	}
 }
 
+// extractBearerToken извлекает Bearer токен из заголовка Authorization HTTP запроса.
+//
+// Параметры:
+//   - c: указатель на контекст Gin (*gin.Context).
+//
+// Возвращает:
+//   - строку токена (без префикса "Bearer ").
+//   - ошибку, если заголовок отсутствует или формат неверный.
 func extractBearerToken(c *gin.Context) (string, error) {
 	authHeader := c.GetHeader("Authorization")
 	if authHeader == "" {
@@ -46,6 +71,18 @@ func extractBearerToken(c *gin.Context) (string, error) {
 	return token, nil
 }
 
+// CheckTokenMiddleware создает middleware, которое проверяет JWT токен определенного типа (access или refresh).
+//
+// Параметры:
+//   - tokenType: строка, тип токена ("access" или "refresh").
+//
+// Возвращает:
+//   - gin.HandlerFunc, который:
+//   - извлекает токен из заголовка Authorization,
+//   - валидирует токен,
+//   - устанавливает в контекст userID, tokenType,
+//   - для refresh-токена дополнительно ищет токен в БД и устанавливает его в контекст.
+//   - Если токен невалидный или просроченный, возвращает 401 ошибку и прерывает цепочку.
 func CheckTokenMiddleware(tokenType string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		db, ok := c.Value("db").(*gorm.DB)
@@ -135,6 +172,10 @@ func CheckTokenMiddleware(tokenType string) gin.HandlerFunc {
 	}
 }
 
+// NotRevokedTokenMiddleware создает middleware, которое проверяет, что access-токен не был отозван.
+// Проверяет, что дата выпуска токена (iat) не раньше времени TokenValidAfter пользователя из БД.
+// Если токен отозван или пользователь не найден — возвращает ошибку 401.
+// Если все ок — добавляет пользователя в контекст.
 func NotRevokedTokenMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		db, ok := c.Value("db").(*gorm.DB)
@@ -189,6 +230,19 @@ func NotRevokedTokenMiddleware() gin.HandlerFunc {
 	}
 }
 
+// generateTokens создает пару access и refresh токенов для пользователя с заданным userID.
+//
+// Формирует access токен, refresh токен, кодирует refresh в base64,
+// хэширует sha256 и bcrypt для безопасного хранения в базе.
+//
+// Параметры:
+//   - userID: идентификатор пользователя, для которого создаются токены.
+//
+// Возвращает:
+//   - accessToken: строка JWT access токена,
+//   - refreshTokenB64: строка base64-кодированного refresh токена,
+//   - refreshHash: bcrypt-хэш sha256-образа refresh токена,
+//   - err: ошибка, если что-то пошло не так.
 func generateTokens(userID uuid.UUID) (string, string, []byte, error) {
 
 	accessToken, err := generateAccessToken(userID.String())
@@ -210,6 +264,9 @@ func generateTokens(userID uuid.UUID) (string, string, []byte, error) {
 	return accessToken, b64Token, refreshHash, nil
 }
 
+// main загружает переменные окружения из .env, инициализирует подключение к БД и Gin router,
+// настраивает маршруты и middleware для разных групп: noTokenGroup, accessTokenGroup, refreshTokenGroup,
+// и запускает HTTP сервер на host и port из .env.
 func main() {
 	godotenv.Load(".env")
 
@@ -243,10 +300,22 @@ func main() {
 	{
 		refreshTokenGroup.POST("", postRefresh)
 	}
-
-	router.Run("localhost:8080")
+	host := fmt.Sprintf(os.Getenv("HOST"), os.Getenv("PORT"))
+	router.Run(host)
 }
 
+// postLogin godoc
+// @Summary      Вход пользователя и получение токенов
+// @Description  Принимает username и password, возвращает access и refresh токены
+// @Tags         auth
+// @Accept       json
+// @Produce      json
+// @Param        credentials  body      LoginRequest  true  "Данные для входа"
+// @Success      200          {object}  map[string]string  "access_token и refresh_token"
+// @Failure      400          {object}  map[string]string  "ошибка запроса"
+// @Failure      401          {object}  map[string]string  "неверные учетные данные"
+// @Failure      500          {object}  map[string]string  "внутренняя ошибка сервера"
+// @Router       /login [post]
 func postLogin(c *gin.Context) {
 	db, ok := c.Value("db").(*gorm.DB)
 	if !ok {
@@ -297,6 +366,17 @@ func postLogin(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"refresh_token": refreshTokenB64, "access_token": accessToken})
 }
 
+// postRefresh godoc
+// @Summary      Обновление токенов (refresh)
+// @Description  Принимает refresh токен в Authorization заголовке, проверяет его и выдает новую пару токенов
+// @Tags         auth
+// @Accept       json
+// @Produce      json
+// @Security     BearerAuth
+// @Success      200  {object}  map[string]string  "новые access и refresh токены"
+// @Failure      401  {object}  map[string]string  "неавторизован"
+// @Failure      500  {object}  map[string]string  "внутренняя ошибка сервера"
+// @Router       /refresh [post]
 func postRefresh(c *gin.Context) {
 	db, ok := c.Value("db").(*gorm.DB)
 	if !ok {
@@ -375,6 +455,15 @@ func postRefresh(c *gin.Context) {
 
 }
 
+// getUserId godoc
+// @Summary      Получить ID пользователя
+// @Description  Защищенный маршрут, возвращает ID пользователя из access токена
+// @Tags         user
+// @Produce      json
+// @Security     BearerAuth
+// @Success      200  {object}  map[string]string  "userid"
+// @Failure      500  {object}  map[string]string  "ошибка получения userid"
+// @Router       /user/uuid/ [get]
 func getUserId(c *gin.Context) {
 	sub, ok := c.Get("userid")
 	if !ok {
@@ -384,6 +473,16 @@ func getUserId(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"userid": sub})
 }
 
+// getLogout godoc
+// @Summary      Выход из системы (logout)
+// @Description  Истекает текущий refresh токен и помечает его как просроченный
+// @Tags         user
+// @Produce      json
+// @Security     BearerAuth
+// @Success      200  {object}  map[string]string  "успешный выход"
+// @Failure      401  {object}  map[string]string  "неавторизован"
+// @Failure      500  {object}  map[string]string  "ошибка сервера"
+// @Router       /user/logout/ [get]
 func getLogout(c *gin.Context) {
 	db, ok := c.Value("db").(*gorm.DB)
 	if !ok {
