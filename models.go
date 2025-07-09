@@ -26,8 +26,3 @@ type RefreshToken struct {
 	UpdatedAt time.Time `gorm:"default:now()"`
 	Expired   bool      `gorm:"default:false"`
 }
-
-type LoginRequest struct {
-	Username string `json:"username"`
-	Password string `json:"password"`
-}

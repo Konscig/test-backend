@@ -18,10 +18,19 @@ import (
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
+
+	_ "test/api/docs"
+
+	swaggerFiles "github.com/swaggo/files"
+	ginSwagger "github.com/swaggo/gin-swagger"
 )
 
 // @title           Example JWT Auth API
 // @version         1.0
+// @securityDefinitions.apikey  BearerAuth
+// @in header
+// @name Authorization
+
 // @description     API для аутентификации и обновления токенов JWT
 // @termsOfService  http://swagger.io/terms/
 
@@ -93,7 +102,7 @@ func CheckTokenMiddleware(tokenType string) gin.HandlerFunc {
 
 		bearerToken, err := extractBearerToken(c)
 		if err != nil {
-			c.JSON(http.StatusUnauthorized, gin.H{"error": "failed to extract token"})
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to extract token"})
 			c.Abort()
 			return
 		}
@@ -300,8 +309,44 @@ func main() {
 	{
 		refreshTokenGroup.POST("", postRefresh)
 	}
-	host := fmt.Sprintf(os.Getenv("HOST"), os.Getenv("PORT"))
+
+	router.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler))
+
+	host := fmt.Sprintf("%s:%s", os.Getenv("HOST"), os.Getenv("PORT"))
 	router.Run(host)
+}
+
+type BadRequestResponse struct {
+	Error string `json:"error" example:"bad request"`
+}
+
+type UnauthorizedResponse struct {
+	Error string `json:"error" example:"unauthorized"`
+}
+
+type InternalServerErrorResponse struct {
+	Error string `json:"error" example:"internal server error"`
+}
+
+type FailedToExtractToken struct {
+	Error string `json:"error" example:"failed to extract token"`
+}
+type FailedToParseToken struct {
+	Error string `json:"error" example:"failed to parse token"`
+}
+
+type NotAnAccess struct {
+	Error string `json:"error" example:"not an access token"`
+}
+
+type LoginRequest struct {
+	Username string `json:"username" example:"Kostya"`
+	Password string `json:"password" example:"1234"`
+}
+
+type LoginResponse struct {
+	AccessToken  string `json:"access_token" example:"eyJhbGciOiJIUzUxMiIsInR5cCI6IkpXVCJ9.eyJleHAiOjE3NTIwMzEzODAsImlhdCI6MTc1MjAzMDQ4MCwic3ViIjoiZDNlZDZiNGUtZWZhMC00ZDk5LWI5ZWItNTNhZTRmYmJlMTU5IiwidHlwZSI6ImFjY2VzcyJ9.M0NnPpfBIOTRJdpPLObAEpjAz7rdYe2CeCmcMlFHstVHXxFI224wmvnx0OG_80r3pY0cGaMMnGVnqW6dg5-ysQ"`
+	RefreshToken string `json:"refresh_token" example:"ZXlKaGJHY2lPaUpJVXpVeE1pSXNJblI1Y0NJNklrcFhWQ0o5LmV5SmxlSEFpT2pFM05UUTJNakkwT0RBc0ltbGhkQ0k2TVRjMU1qQXpNRFE0TUN3aWMzVmlJam9pWkRObFpEWmlOR1V0WldaaE1DMDBaRGs1TFdJNVpXSXROVE5oWlRSbVltSmxNVFU1SWl3aWRIbHdaU0k2SW5KbFpuSmxjMmdpZlEuUUtJQTViczZwMkxxZHdxUUwybUUySGtGWjFITnVldU1VNlpScXVndDRUbUg4QkFCVFpLSTdkNEZLX3hDTGo5SnhDVjItbXp5a1h4RG90NTFOUXl1RVE="`
 }
 
 // postLogin godoc
@@ -310,11 +355,11 @@ func main() {
 // @Tags         auth
 // @Accept       json
 // @Produce      json
-// @Param        credentials  body      LoginRequest  true  "Данные для входа"
-// @Success      200          {object}  map[string]string  "access_token и refresh_token"
-// @Failure      400          {object}  map[string]string  "ошибка запроса"
-// @Failure      401          {object}  map[string]string  "неверные учетные данные"
-// @Failure      500          {object}  map[string]string  "внутренняя ошибка сервера"
+// @Param        credentials  body      LoginRequest  				true  		"Данные для входа"
+// @Success      200          {object}  LoginResponse 	   						"access_token и refresh_token"
+// @Failure      400          {object}  BadRequestResponse  					"ошибка запроса"
+// @Failure      401          {object}  UnauthorizedResponse  					"неверные учетные данные"
+// @Failure      500          {object}  InternalServerErrorResponse 			"внутренняя ошибка сервера"
 // @Router       /login [post]
 func postLogin(c *gin.Context) {
 	db, ok := c.Value("db").(*gorm.DB)
@@ -366,16 +411,28 @@ func postLogin(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"refresh_token": refreshTokenB64, "access_token": accessToken})
 }
 
+type RefreshRequest struct {
+	UserAgent string `json:"User-Agent" example:"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537."`
+	IPAddress string `json:"X-Forwarded-For" example:"192.168.1.1"`
+}
+
+type RefreshResponse struct {
+	AccessToken  string `json:"access_token" example:"eyJhbGciOiJIUzUxMiIsInR5cCI6IkpXVCJ9.eyJleHAiOjE3NTIwNjM2NjEsImlhdCI6MTc1MjA2Mjc2MSwic3ViIjoiZDNlZDZiNGUtZWZhMC00ZDk5LWI5ZWItNTNhZTRmYmJlMTU5IiwidHlwZSI6ImFjY2VzcyJ9.BQ9D350iGisxqGNJoVENkpcn2zrCM5rgx2UsFZ8KJvTbtzmDjAqugFSwzdGduglCKZuS2bpcqGU5zAuqO2aMbQ"`
+	RefreshToken string `json:"refresh_token" example:"ZXlKaGJHY2lPaUpJVXpVeE1pSXNJblI1Y0NJNklrcFhWQ0o5LmV5SmxlSEFpT2pFM05UUTJOVFEzTmpFc0ltbGhkQ0k2TVRjMU1qQTJNamMyTVN3aWMzVmlJam9pWkRObFpEWmlOR1V0WldaaE1DMDBaRGs1TFdJNVpXSXROVE5oWlRSbVltSmxNVFU1SWl3aWRIbHdaU0k2SW5KbFpuSmxjMmdpZlEuZi1wSGlpbm9McHhBakV5eFlWcVdmRFRhVjc5cXRaS3pFUURaSXZJU1F3NWpvVDBMVTF5R0FCbGRIT2JucEV6M01DRmRQeFRhdC1kWjRxWjYxb3dlUEE="`
+}
+
 // postRefresh godoc
 // @Summary      Обновление токенов (refresh)
-// @Description  Принимает refresh токен в Authorization заголовке, проверяет его и выдает новую пару токенов
-// @Tags         auth
+// @Description  Принимает refresh токен в Authorization заголовке (Bearer <refresh_token>), проверяет его и выдает новую пару (access/refresh) токенов
+// @Tags         refresh
 // @Accept       json
 // @Produce      json
 // @Security     BearerAuth
-// @Success      200  {object}  map[string]string  "новые access и refresh токены"
-// @Failure      401  {object}  map[string]string  "неавторизован"
-// @Failure      500  {object}  map[string]string  "внутренняя ошибка сервера"
+// @Param        Refresh  		body      RefreshRequest  				true  	"User-Agent и IP адрес"
+// @Success      200  			{object}  RefreshResponse  						"новые access и refresh токены"
+// @Failure      401  			{object}  UnauthorizedResponse 					"неавторизован"
+// @Failure      500  			{object}  FailedToParseToken 					"ошибка парсинга токена"
+// @Failure      500  			{object}  InternalServerErrorResponse  			"внутренняя ошибка сервера"
 // @Router       /refresh [post]
 func postRefresh(c *gin.Context) {
 	db, ok := c.Value("db").(*gorm.DB)
@@ -455,14 +512,21 @@ func postRefresh(c *gin.Context) {
 
 }
 
+type GetUserIdResponse struct {
+	UserID string `json:"userid" example:"d3ed6b4e-efa0-4d99-b9eb-53ae4fbbe159"`
+}
+
 // getUserId godoc
 // @Summary      Получить ID пользователя
 // @Description  Защищенный маршрут, возвращает ID пользователя из access токена
 // @Tags         user
 // @Produce      json
 // @Security     BearerAuth
-// @Success      200  {object}  map[string]string  "userid"
-// @Failure      500  {object}  map[string]string  "ошибка получения userid"
+// @Success      200  			{object}  	GetUserIdResponse  					"userid"
+// @Failure      401  			{object}  	UnauthorizedResponse 				"неавторизован"
+// @Failure      401  			{object}  	NotAnAccess 						"не является access токеном"
+// @Failure      500  			{object}  	FailedToExtractToken 				"ошибка извлечения токена"
+// @Failure      500  			{object}  	InternalServerErrorResponse  		"ошибка получения userid"
 // @Router       /user/uuid/ [get]
 func getUserId(c *gin.Context) {
 	sub, ok := c.Get("userid")
@@ -473,15 +537,19 @@ func getUserId(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"userid": sub})
 }
 
+type GetLogoutResponse struct {
+	Message string `json:"message" example:"successful logout"`
+}
+
 // getLogout godoc
 // @Summary      Выход из системы (logout)
 // @Description  Истекает текущий refresh токен и помечает его как просроченный
 // @Tags         user
 // @Produce      json
 // @Security     BearerAuth
-// @Success      200  {object}  map[string]string  "успешный выход"
-// @Failure      401  {object}  map[string]string  "неавторизован"
-// @Failure      500  {object}  map[string]string  "ошибка сервера"
+// @Success      200  			{object}  	GetLogoutResponse  					"успешный выход"
+// @Failure      401  			{object}  	UnauthorizedResponse  				"неавторизован"
+// @Failure      500  			{object}  	InternalServerErrorResponse  		"ошибка сервера"
 // @Router       /user/logout/ [get]
 func getLogout(c *gin.Context) {
 	db, ok := c.Value("db").(*gorm.DB)
