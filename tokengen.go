@@ -28,14 +28,9 @@ func generateRefreshToken(userID string, exp int64) (string, error) {
 }
 
 func checkToken(tokenString string, tokenType string) (*jwt.Token, error) {
-	fmt.Println("income token:", tokenString)
-	fmt.Println("income type:", tokenType)
-
 	token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
 		return []byte(os.Getenv("SECRET_KEY")), nil
 	})
-
-	fmt.Println("parsed token:", token)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse token")
 	}

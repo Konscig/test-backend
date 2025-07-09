@@ -63,9 +63,6 @@ func CheckTokenMiddleware(tokenType string) gin.HandlerFunc {
 
 		var token *jwt.Token
 
-		fmt.Println("type:", tokenType)
-		fmt.Println("bearer:", bearerToken)
-
 		if tokenType == "refresh" {
 			clearToken, err := base64.StdEncoding.DecodeString(bearerToken)
 			if err != nil {
@@ -73,8 +70,6 @@ func CheckTokenMiddleware(tokenType string) gin.HandlerFunc {
 				c.Abort()
 				return
 			}
-
-			fmt.Println("clean:", string(clearToken))
 			token, err = checkToken(string(clearToken), tokenType)
 			if err != nil {
 				c.JSON(http.StatusUnauthorized, gin.H{"error ": "failed to check token"})
@@ -116,8 +111,6 @@ func CheckTokenMiddleware(tokenType string) gin.HandlerFunc {
 
 			c.Next()
 		} else if tokenType == "access" {
-			fmt.Println("bearerToken: ", bearerToken)
-			fmt.Println("tokenType: ", tokenType)
 
 			token, err = checkToken(bearerToken, tokenType)
 			if err != nil {
@@ -206,7 +199,6 @@ func generateTokens(userID uuid.UUID) (string, string, []byte, error) {
 	if err != nil {
 		return "", "", nil, fmt.Errorf("failed to create refresh token: %v", err)
 	}
-	fmt.Println("CREATED REF token: ", refreshToken)
 
 	b64Token := base64.StdEncoding.EncodeToString([]byte(refreshToken))
 	shaToken := sha256.Sum256([]byte(b64Token))
@@ -314,14 +306,12 @@ func postRefresh(c *gin.Context) {
 
 	tokenValue, ok := c.Get("spottedToken")
 	if !ok {
-		fmt.Println("token not found in context")
 		c.JSON(401, gin.H{"error": "Unauthorized"})
 		return
 	}
 
 	oldRefreshToken, ok := tokenValue.(*RefreshToken)
 	if !ok {
-		fmt.Println("token not found in context")
 		c.JSON(401, gin.H{"error": "Unauthorized"})
 		return
 	}
