@@ -1,4 +1,12 @@
 .env
-go.sum
 .DS_Store
 /docs
+
+/app
+
+*.out
+*.log
+*.tmp
+
+.vscode/
+.idea/
